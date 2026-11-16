@@ -1,0 +1,26 @@
+[workspace]
+name = "rep-book"
+authors = ["Tevin Temu <tevintemu@gmail.com>"]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "win-64"]
+
+[dependencies]
+python = "3.12.*"
+fastapi = ">=0.115"
+uvicorn = ">=0.30"
+sqlalchemy = ">=2.0.30,<3"
+pydantic = ">=2.7,<3"
+python-multipart = ">=0.0.9"
+pytest = ">=8"
+httpx = ">=0.27"
+
+[pypi-dependencies]
+repbook = { path = "backend", editable = true }
+
+[tasks]
+# Serves the app on http://127.0.0.1:8775 and opens it in the browser
+start = "python -m repbook"
+serve = "python -m repbook --no-browser"
+test = { cmd = "pytest -q", cwd = "backend" }
+# Installers for people without a terminal: packaging/dist/*-mac.zip and *-windows.zip (see packaging/README.md)
+release = "python packaging/build_release.py"

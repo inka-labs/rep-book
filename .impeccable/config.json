@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "backend/repbook/static/index.html"
+        ],
+        "createdAt": "2026-11-16T10:42:40.323Z",
+        "reason": "Claude: the flagged element is the 4px top strip on Week day cards (.wd::before), not a side border; it encodes the planned workout's plate colour"
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+.pixi/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+packaging/dist/
+.DS_Store
+*.sqlite3
+.impeccable/hook.cache.json
