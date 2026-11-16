@@ -3,7 +3,8 @@
     days            date (YYYY-MM-DD), workout, done, body weight, waist, minutes, energy, notes
     exercise_logs   one exercise on one day (ticked done or not)
     sets            one set of it: kg and reps (seconds for timed holds)
-    settings        one row: weight goal, sessions per week, training days, lift targets
+    settings        one row: weight goal, sessions per week, training days, lift targets, plan, nutrition
+    meal_weeks      one row per week of meal prep
 """
 
 from collections.abc import Iterator
@@ -74,6 +75,16 @@ class Settings(Base):
     schedule: Mapped[dict] = mapped_column(JSON, default=lambda: dict(DEFAULT_SCHEDULE))
     lift_targets: Mapped[dict] = mapped_column(JSON, default=dict)
     theme: Mapped[dict | None] = mapped_column(JSON, default=lambda: dict(DEFAULT_THEME))  # added in 1.1
+    plan: Mapped[dict | None] = mapped_column(JSON)  # added in 1.2; None = the built-in plan (default_plan.json)
+    nutrition: Mapped[dict | None] = mapped_column(JSON)  # added in 1.3: goal, budget, maintenance override, prices
+
+
+class MealWeek(Base):
+    """One week's meal prep (added in 1.3): which recipe in each slot, portions, days, shopping ticks."""
+    __tablename__ = "meal_weeks"
+    week: Mapped[str] = mapped_column(String(10), primary_key=True)  # the Monday, YYYY-MM-DD
+    plan: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
 
 
 def make_engine(db_path: Path) -> Engine:
@@ -95,8 +106,9 @@ def _upgrade(engine: Engine) -> None:
     """Columns added after 1.0: create_all makes new tables but doesn't add columns to existing ones."""
     columns = {c["name"] for c in inspect(engine).get_columns("settings")}
     with engine.begin() as conn:
-        if "theme" not in columns:
-            conn.execute(text("ALTER TABLE settings ADD COLUMN theme JSON"))
+        for name in ("theme", "plan", "nutrition"):
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN {name} JSON"))
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker[Session]:

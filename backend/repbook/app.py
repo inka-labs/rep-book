@@ -6,11 +6,11 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date as Date
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from . import __version__, backup, paths, store
@@ -19,7 +19,8 @@ from .security import COOKIE, session_token
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "testserver"}
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-WORKOUTS = {"A", "B", "C", "D", "cardio", "rest"}
+ID = r"^[A-Za-z0-9_-]{1,40}$"  # workout and exercise ids
+COLORS = Literal["red", "blue", "yellow", "green", "violet", "teal", "orange", "pink"]
 
 
 def _hostname(host: str) -> str:
@@ -37,6 +38,67 @@ def _check_date(value: str) -> str:
 
 
 # ---------- request bodies ----------
+
+class PlanExerciseIn(BaseModel):
+    id: str = Field(pattern=ID)
+    s: int = Field(3, ge=1, le=20)  # sets
+    r: str = Field("", max_length=30)  # reps, as shown: "6–10", "45 s"
+
+
+class WorkoutIn(BaseModel):
+    id: str = Field(pattern=ID)
+    short: str = Field(min_length=1, max_length=20)
+    name: str = Field("", max_length=60)
+    color: COLORS = "red"
+    archived: bool = False
+    ex: list[PlanExerciseIn] = Field(default_factory=list, max_length=40)
+
+
+class ExerciseDefIn(BaseModel):
+    n: str = Field(min_length=1, max_length=60)
+    k: Literal["w", "b", "t"] = "w"  # weight × reps, bodyweight reps (+kg), timed (seconds)
+
+
+class PlanIn(BaseModel):
+    workouts: list[WorkoutIn] = Field(max_length=30)
+    exercises: dict[str, ExerciseDefIn] = Field(max_length=500)
+
+    @model_validator(mode="after")
+    def consistent(self):
+        ids = [w.id for w in self.workouts]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Two workouts have the same id.")
+        if set(ids) & {"cardio", "rest"}:
+            raise ValueError("cardio and rest are built in.")
+        for w in self.workouts:
+            for e in w.ex:
+                if e.id not in self.exercises:
+                    raise ValueError(f"{w.short} lists an exercise that isn't defined ({e.id}).")
+        for key in self.exercises:
+            if not re.match(ID, key):
+                raise ValueError(f"Bad exercise id: {key}")
+        return self
+
+
+class NutritionIn(BaseModel):
+    goal: Literal["cut", "maintain", "bulk"] = "maintain"
+    budget: bool = False
+    weeklyBudget: float | None = Field(None, ge=0, le=1_000_000)
+    maintenance: float | None = Field(None, ge=800, le=6000)  # kcal a day; None = estimate from body weight
+    prices: dict[Annotated[str, Field(pattern=ID)], Annotated[float, Field(ge=0, le=1_000_000)]] = Field(
+        default_factory=dict, max_length=300)
+
+
+class MealSlotIn(BaseModel):
+    recipe: str = Field(pattern=ID)
+    portions: float | None = Field(None, ge=0.25, le=6)  # None = sized to the goal automatically
+
+
+class MealWeekIn(BaseModel):
+    slots: dict[Literal["breakfast", "lunch", "dinner", "snack"], MealSlotIn | None] = Field(default_factory=dict)
+    days: int = Field(7, ge=1, le=7)
+    checked: list[Annotated[str, Field(pattern=ID)]] = Field(default_factory=list, max_length=300)
+
 
 class SetIn(BaseModel):
     w: float | None = Field(None, ge=0, le=1000)
@@ -56,13 +118,21 @@ class DayIn(BaseModel):
     minutes: float | None = Field(None, ge=0, le=1440)
     energy: int | None = Field(None, ge=1, le=5)
     notes: str = Field("", max_length=5000)
-    ex: dict[str, ExerciseIn] = Field(default_factory=dict)
+    ex: dict[str, ExerciseIn] = Field(default_factory=dict, max_length=60)
 
     @field_validator("type")
     @classmethod
-    def known_workout(cls, v):
-        if v is not None and v not in WORKOUTS:
-            raise ValueError(f"Workout must be one of {', '.join(sorted(WORKOUTS))}.")
+    def workout_id(cls, v):
+        if v is not None and not re.match(ID, v):
+            raise ValueError("That isn't a workout.")
+        return v
+
+    @field_validator("ex")
+    @classmethod
+    def exercise_ids(cls, v):
+        for key in v:
+            if not re.match(ID, key):
+                raise ValueError(f"Bad exercise id: {key}")
         return v
 
 
@@ -76,9 +146,11 @@ class SettingsIn(BaseModel):
     goalWeight: float | None = Field(None, gt=0, le=500)
     goalDate: str = ""
     sessionsPerWeek: int = Field(4, ge=1, le=7)
-    schedule: dict[Literal["0", "1", "2", "3", "4", "5", "6"], Literal["A", "B", "C", "D"]] = Field(default_factory=dict)
+    schedule: dict[Literal["0", "1", "2", "3", "4", "5", "6"], Annotated[str, Field(pattern=ID)]] = Field(default_factory=dict)
     lifts: dict[str, float | None] = Field(default_factory=dict)
     theme: ThemeIn | None = None
+    plan: PlanIn | None = None
+    nutrition: NutritionIn | None = None
 
 
 # ---------- app ----------
@@ -142,6 +214,7 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
     def state(db: Session = Depends(get_db)):
         return {"settings": store.settings_out(store.get_settings(db)),
                 "days": {d.date: store.day_out(d) for d in store.all_days(db)},
+                "meals": store.all_meals(db), "food": store.FOOD,
                 "dataFolder": str(data), "version": __version__}
 
     @app.put("/api/v1/days/{date}")
@@ -159,6 +232,19 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
         if body.goalDate:
             _check_date(body.goalDate)
         return store.settings_out(store.put_settings(db, body.model_dump()))
+
+    # ----- meal prep -----
+
+    @app.put("/api/v1/meals/{week}")
+    def save_meals(week: str, body: MealWeekIn, db: Session = Depends(get_db)):
+        if Date.fromisoformat(_check_date(week)).weekday() != 0:
+            raise HTTPException(400, "A meal week starts on a Monday.")
+        return store.put_meals(db, week, body.model_dump())
+
+    @app.delete("/api/v1/meals/{week}", status_code=204)
+    def remove_meals(week: str, db: Session = Depends(get_db)):
+        store.delete_meals(db, _check_date(week))
+        return Response(status_code=204)
 
     # ----- export / import -----
 
@@ -191,8 +277,11 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
         for item in raw["days"]:
             _check_date(str(item.get("date", "")))
             days.append({"date": item["date"], **DayIn.model_validate(item).model_dump()})
+        meals = {}
+        for week, plan in (raw.get("meals") or {}).items():
+            meals[_check_date(str(week))] = MealWeekIn.model_validate(plan).model_dump()
         before = backup.make_backup(data, "before-import")
-        count = store.import_all(db, {"settings": settings.model_dump(), "days": days})
+        count = store.import_all(db, {"settings": settings.model_dump(), "days": days, "meals": meals})
         return {"days": count, "backup": before["name"]}
 
     # ----- backups -----

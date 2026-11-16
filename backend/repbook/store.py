@@ -10,15 +10,35 @@ Settings: {"startWeight", "goalWeight", "goalDate", "sessionsPerWeek", "schedule
 
 import csv
 import io
+import json
+from pathlib import Path
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from . import __version__
-from .db import DEFAULT_SCHEDULE, DEFAULT_THEME, Day, ExerciseLog, SetLog, Settings
+from .db import DEFAULT_SCHEDULE, DEFAULT_THEME, Day, ExerciseLog, MealWeek, SetLog, Settings
 
-WORKOUT_NAMES = {"A": "Push", "B": "Pull", "C": "Legs", "D": "Upper", "cardio": "Cardio", "rest": "Rest"}
+# The plan a new log starts with: Push / Pull / Legs / Upper and their exercises. Edited in the Workouts tab, and
+# then saved in settings.plan.
+DEFAULT_PLAN = json.loads((Path(__file__).parent / "default_plan.json").read_text())
+# Ingredients (nutrition, estimated prices) and starter recipes for the Meals tab
+FOOD = json.loads((Path(__file__).parent / "food.json").read_text(encoding="utf-8"))
+DEFAULT_NUTRITION = {"goal": "maintain", "budget": False, "weeklyBudget": None, "maintenance": None, "prices": {}}
+OTHER_NAMES = {"cardio": "Cardio", "rest": "Rest"}
+
+
+def plan_of(row: Settings) -> dict:
+    return row.plan or DEFAULT_PLAN
+
+
+def _names(db: Session) -> tuple[dict, dict]:
+    """Workout id -> short name, exercise id -> name (for the CSV exports)."""
+    plan = plan_of(get_settings(db))
+    workouts = {w["id"]: w["short"] for w in plan["workouts"]} | OTHER_NAMES
+    exercises = {k: v["n"] for k, v in plan["exercises"].items()}
+    return workouts, exercises
 
 
 # ---------- days ----------
@@ -86,7 +106,8 @@ def get_settings(db: Session) -> Settings:
 def settings_out(row: Settings) -> dict:
     return {"startWeight": row.start_weight, "goalWeight": row.goal_weight, "goalDate": row.goal_date or "",
             "sessionsPerWeek": row.sessions_per_week, "schedule": dict(row.schedule or {}),
-            "lifts": dict(row.lift_targets or {}), "theme": {**DEFAULT_THEME, **(row.theme or {})}}
+            "lifts": dict(row.lift_targets or {}), "theme": {**DEFAULT_THEME, **(row.theme or {})},
+            "plan": plan_of(row), "nutrition": {**DEFAULT_NUTRITION, **(row.nutrition or {})}}
 
 
 def put_settings(db: Session, body: dict) -> Settings:
@@ -99,8 +120,31 @@ def put_settings(db: Session, body: dict) -> Settings:
     row.lift_targets = {k: v for k, v in (body.get("lifts") or {}).items() if v is not None}
     if body.get("theme"):
         row.theme = {**DEFAULT_THEME, **body["theme"]}
+    if body.get("plan"):
+        row.plan = body["plan"]
+    if body.get("nutrition"):
+        row.nutrition = {**DEFAULT_NUTRITION, **body["nutrition"]}
     db.commit()
     return row
+
+
+# ---------- meal prep ----------
+
+def all_meals(db: Session) -> dict:
+    return {m.week: m.plan for m in db.scalars(select(MealWeek).order_by(MealWeek.week))}
+
+
+def put_meals(db: Session, week: str, plan: dict) -> dict:
+    row = db.get(MealWeek, week) or MealWeek(week=week)
+    row.plan = plan
+    db.add(row)
+    db.commit()
+    return row.plan
+
+
+def delete_meals(db: Session, week: str) -> None:
+    db.execute(delete(MealWeek).where(MealWeek.week == week))
+    db.commit()
 
 
 # ---------- export / import ----------
@@ -108,7 +152,8 @@ def put_settings(db: Session, body: dict) -> Settings:
 def export_all(db: Session) -> dict:
     return {"app": "rep-book", "version": __version__,
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "settings": settings_out(get_settings(db)), "days": [day_out(d) for d in all_days(db)]}
+            "settings": settings_out(get_settings(db)), "days": [day_out(d) for d in all_days(db)],
+            "meals": all_meals(db)}
 
 
 def import_all(db: Session, data: dict) -> int:
@@ -116,11 +161,14 @@ def import_all(db: Session, data: dict) -> int:
     db.execute(delete(SetLog))
     db.execute(delete(ExerciseLog))
     db.execute(delete(Day))
+    db.execute(delete(MealWeek))
     db.commit()
     put_settings(db, data.get("settings") or {})
     days = data.get("days") or []
     for day in days:
         put_day(db, day["date"], day)
+    for week, plan in (data.get("meals") or {}).items():
+        put_meals(db, week, plan)
     return len(days)
 
 
@@ -131,19 +179,21 @@ def _csv(rows: list[list]) -> str:
 
 
 def sets_csv(db: Session) -> str:
+    workouts, exercises = _names(db)
     rows = [["date", "workout", "exercise", "set", "kg", "reps_or_seconds", "exercise_done"]]
     for day in all_days(db):
         for log in day.exercises:
             for s in log.sets:
-                rows.append([day.date, WORKOUT_NAMES.get(day.workout or "", ""), log.exercise, s.set_no,
+                rows.append([day.date, workouts.get(day.workout or "", ""), exercises.get(log.exercise, log.exercise), s.set_no,
                              s.weight if s.weight is not None else "", s.reps if s.reps is not None else "",
                              "yes" if log.done else ""])
     return _csv(rows)
 
 
 def days_csv(db: Session) -> str:
+    workouts, _ = _names(db)
     rows = [["date", "workout", "session_done", "body_weight_kg", "waist_cm", "minutes", "energy_1_to_5", "notes"]]
     for d in all_days(db):
-        rows.append([d.date, WORKOUT_NAMES.get(d.workout or "", ""), "yes" if d.done else "",
+        rows.append([d.date, workouts.get(d.workout or "", ""), "yes" if d.done else "",
                      *("" if v is None else v for v in (d.body_weight, d.waist, d.minutes, d.energy)), d.notes or ""])
     return _csv(rows)

@@ -1,0 +1,285 @@
+{
+ "workouts": [
+  {
+   "id": "A",
+   "short": "Push",
+   "name": "Chest, Shoulders, Triceps",
+   "color": "red",
+   "archived": false,
+   "ex": [
+    {
+     "id": "bench",
+     "s": 4,
+     "r": "6–10"
+    },
+    {
+     "id": "incdb",
+     "s": 3,
+     "r": "8–12"
+    },
+    {
+     "id": "ohp",
+     "s": 3,
+     "r": "8–10"
+    },
+    {
+     "id": "lat",
+     "s": 3,
+     "r": "12–15"
+    },
+    {
+     "id": "fly",
+     "s": 2,
+     "r": "12–15"
+    },
+    {
+     "id": "pushdown",
+     "s": 3,
+     "r": "10–12"
+    }
+   ]
+  },
+  {
+   "id": "B",
+   "short": "Pull",
+   "name": "Back, Biceps, Core",
+   "color": "blue",
+   "archived": false,
+   "ex": [
+    {
+     "id": "pulldown",
+     "s": 4,
+     "r": "6–10"
+    },
+    {
+     "id": "row",
+     "s": 3,
+     "r": "8–10"
+    },
+    {
+     "id": "cablerow",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "facepull",
+     "s": 2,
+     "r": "15"
+    },
+    {
+     "id": "curl",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "plank",
+     "s": 3,
+     "r": "45 s"
+    },
+    {
+     "id": "kneeraise",
+     "s": 3,
+     "r": "12"
+    }
+   ]
+  },
+  {
+   "id": "C",
+   "short": "Legs",
+   "name": "Legs, Core",
+   "color": "yellow",
+   "archived": false,
+   "ex": [
+    {
+     "id": "squat",
+     "s": 4,
+     "r": "6–10"
+    },
+    {
+     "id": "rdl",
+     "s": 3,
+     "r": "8–10"
+    },
+    {
+     "id": "legpress",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "legcurl",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "calf",
+     "s": 3,
+     "r": "15"
+    },
+    {
+     "id": "cablecrunch",
+     "s": 3,
+     "r": "12"
+    },
+    {
+     "id": "sideplank",
+     "s": 3,
+     "r": "30 s each side"
+    }
+   ]
+  },
+  {
+   "id": "D",
+   "short": "Upper",
+   "name": "Shoulders, Arms, Upper Body",
+   "color": "green",
+   "archived": false,
+   "ex": [
+    {
+     "id": "arnold",
+     "s": 3,
+     "r": "8–10"
+    },
+    {
+     "id": "pushup",
+     "s": 3,
+     "r": "near failure"
+    },
+    {
+     "id": "dbrow",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "reardelt",
+     "s": 3,
+     "r": "12–15"
+    },
+    {
+     "id": "hammer",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "ohext",
+     "s": 3,
+     "r": "10–12"
+    },
+    {
+     "id": "twist",
+     "s": 3,
+     "r": "15 / 10"
+    }
+   ]
+  }
+ ],
+ "exercises": {
+  "bench": {
+   "n": "Bench press",
+   "k": "w"
+  },
+  "incdb": {
+   "n": "Incline dumbbell press",
+   "k": "w"
+  },
+  "ohp": {
+   "n": "Seated overhead press",
+   "k": "w"
+  },
+  "lat": {
+   "n": "Lateral raises",
+   "k": "w"
+  },
+  "fly": {
+   "n": "Cable or machine chest fly",
+   "k": "w"
+  },
+  "pushdown": {
+   "n": "Triceps rope pushdown",
+   "k": "w"
+  },
+  "pulldown": {
+   "n": "Lat pulldown or pull-ups",
+   "k": "w"
+  },
+  "row": {
+   "n": "Barbell or dumbbell row",
+   "k": "w"
+  },
+  "cablerow": {
+   "n": "Seated cable row",
+   "k": "w"
+  },
+  "facepull": {
+   "n": "Face pulls",
+   "k": "w"
+  },
+  "curl": {
+   "n": "Dumbbell curls",
+   "k": "w"
+  },
+  "plank": {
+   "n": "Plank",
+   "k": "t"
+  },
+  "kneeraise": {
+   "n": "Hanging knee raises",
+   "k": "b"
+  },
+  "squat": {
+   "n": "Squat (barbell or goblet)",
+   "k": "w"
+  },
+  "rdl": {
+   "n": "Romanian deadlift",
+   "k": "w"
+  },
+  "legpress": {
+   "n": "Leg press or walking lunges",
+   "k": "w"
+  },
+  "legcurl": {
+   "n": "Leg curl",
+   "k": "w"
+  },
+  "calf": {
+   "n": "Calf raises",
+   "k": "w"
+  },
+  "cablecrunch": {
+   "n": "Cable crunch",
+   "k": "w"
+  },
+  "sideplank": {
+   "n": "Side plank",
+   "k": "t"
+  },
+  "arnold": {
+   "n": "Arnold or dumbbell shoulder press",
+   "k": "w"
+  },
+  "pushup": {
+   "n": "Push-ups or dips",
+   "k": "b"
+  },
+  "dbrow": {
+   "n": "Chest-supported or one-arm row",
+   "k": "w"
+  },
+  "reardelt": {
+   "n": "Rear-delt fly",
+   "k": "w"
+  },
+  "hammer": {
+   "n": "Hammer curls",
+   "k": "w"
+  },
+  "ohext": {
+   "n": "Overhead triceps extension",
+   "k": "w"
+  },
+  "twist": {
+   "n": "Russian twists or ab wheel",
+   "k": "b"
+  }
+ }
+}

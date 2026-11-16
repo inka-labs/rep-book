@@ -1,7 +1,19 @@
 # Rep Book
 
-A workout log for a 4-day split (Push, Pull, Legs, Upper): sets and reps per exercise, body weight, a week view,
-a year calendar, targets and progress charts. It runs on one computer and opens in the browser.
+A workout log: sets and reps per exercise, body weight, a week view, a year calendar, targets and progress
+charts. It runs on one computer and opens in the browser.
+
+It starts with a 4-day split (Push, Pull, Legs, Upper; [backend/repbook/default_plan.json](backend/repbook/default_plan.json)).
+The **Workouts** tab edits it: add, rename, reorder or remove exercises, change sets × reps, and create new workout
+types with their own colour. The daily log can also take one-off exercises for a single session. The plan is
+saved in the settings table; removed workouts and exercises stay in it (archived) so their history keeps its names.
+
+The **Meals** tab adds meal prep. Pick a goal (lose weight, maintain or build muscle) and switch on Budget if you
+like; that sets daily calorie and protein targets from your logged body weight (maintenance is estimated at
+33 kcal per kg unless you type your own). It suggests a week of breakfast, lunch, dinner and a snack from starter
+recipes built on Kenyan staples, sizes the portions to your calories, and gives a prep-day cooking list and a
+shopping list with KES costs. Ingredients, nutrition and estimated prices are in
+[backend/repbook/food.json](backend/repbook/food.json); prices can be edited in the app.
 
 ## How it's built
 
