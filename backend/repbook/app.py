@@ -66,6 +66,11 @@ class DayIn(BaseModel):
         return v
 
 
+class ThemeIn(BaseModel):
+    mode: Literal["system", "light", "dark"] = "system"
+    accent: Literal["blue", "teal", "violet", "orange", "graphite"] = "blue"
+
+
 class SettingsIn(BaseModel):
     startWeight: float | None = Field(None, gt=0, le=500)
     goalWeight: float | None = Field(None, gt=0, le=500)
@@ -73,6 +78,7 @@ class SettingsIn(BaseModel):
     sessionsPerWeek: int = Field(4, ge=1, le=7)
     schedule: dict[Literal["0", "1", "2", "3", "4", "5", "6"], Literal["A", "B", "C", "D"]] = Field(default_factory=dict)
     lifts: dict[str, float | None] = Field(default_factory=dict)
+    theme: ThemeIn | None = None
 
 
 # ---------- app ----------

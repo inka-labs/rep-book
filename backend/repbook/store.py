@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from . import __version__
-from .db import DEFAULT_SCHEDULE, Day, ExerciseLog, SetLog, Settings
+from .db import DEFAULT_SCHEDULE, DEFAULT_THEME, Day, ExerciseLog, SetLog, Settings
 
 WORKOUT_NAMES = {"A": "Push", "B": "Pull", "C": "Legs", "D": "Upper", "cardio": "Cardio", "rest": "Rest"}
 
@@ -86,7 +86,7 @@ def get_settings(db: Session) -> Settings:
 def settings_out(row: Settings) -> dict:
     return {"startWeight": row.start_weight, "goalWeight": row.goal_weight, "goalDate": row.goal_date or "",
             "sessionsPerWeek": row.sessions_per_week, "schedule": dict(row.schedule or {}),
-            "lifts": dict(row.lift_targets or {})}
+            "lifts": dict(row.lift_targets or {}), "theme": {**DEFAULT_THEME, **(row.theme or {})}}
 
 
 def put_settings(db: Session, body: dict) -> Settings:
@@ -97,6 +97,8 @@ def put_settings(db: Session, body: dict) -> Settings:
     row.sessions_per_week = int(body.get("sessionsPerWeek") or 4)
     row.schedule = {str(k): v for k, v in (body.get("schedule") or {}).items()}
     row.lift_targets = {k: v for k, v in (body.get("lifts") or {}).items() if v is not None}
+    if body.get("theme"):
+        row.theme = {**DEFAULT_THEME, **body["theme"]}
     db.commit()
     return row
 

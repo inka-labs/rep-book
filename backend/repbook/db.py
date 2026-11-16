@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Request
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 DEFAULT_SCHEDULE = {"1": "A", "2": "B", "4": "C", "5": "D"}  # Mon Push, Tue Pull, Thu Legs, Fri Upper
+DEFAULT_THEME = {"mode": "system", "accent": "blue"}
 
 
 def utcnow() -> datetime:
@@ -72,6 +73,7 @@ class Settings(Base):
     sessions_per_week: Mapped[int] = mapped_column(Integer, default=4)
     schedule: Mapped[dict] = mapped_column(JSON, default=lambda: dict(DEFAULT_SCHEDULE))
     lift_targets: Mapped[dict] = mapped_column(JSON, default=dict)
+    theme: Mapped[dict | None] = mapped_column(JSON, default=lambda: dict(DEFAULT_THEME))  # added in 1.1
 
 
 def make_engine(db_path: Path) -> Engine:
@@ -85,7 +87,16 @@ def make_engine(db_path: Path) -> Engine:
         cur.close()
 
     Base.metadata.create_all(engine)
+    _upgrade(engine)
     return engine
+
+
+def _upgrade(engine: Engine) -> None:
+    """Columns added after 1.0: create_all makes new tables but doesn't add columns to existing ones."""
+    columns = {c["name"] for c in inspect(engine).get_columns("settings")}
+    with engine.begin() as conn:
+        if "theme" not in columns:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN theme JSON"))
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker[Session]:

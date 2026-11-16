@@ -112,3 +112,28 @@ def test_backup_and_restore(client):
 def test_page_served(client):
     r = client.get("/week")
     assert r.status_code == 200 and "<title>Rep Book</title>" in r.text
+
+
+def test_theme(client):
+    assert client.get("/api/v1/state").json()["settings"]["theme"] == {"mode": "system", "accent": "blue"}
+    base = client.get("/api/v1/state").json()["settings"]
+    out = client.put("/api/v1/settings", json={**base, "theme": {"mode": "dark", "accent": "teal"}}).json()
+    assert out["theme"] == {"mode": "dark", "accent": "teal"}
+    # Saving targets without a theme keeps the one chosen
+    assert client.put("/api/v1/settings", json={**base, "theme": None}).json()["theme"]["accent"] == "teal"
+    assert client.put("/api/v1/settings", json={**base, "theme": {"accent": "pink"}}).status_code in (400, 422)
+
+
+def test_1_0_database_gets_theme_column(tmp_path):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "db.sqlite3")
+    con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, start_weight FLOAT, goal_weight FLOAT, goal_date VARCHAR(10), "
+                "sessions_per_week INTEGER, schedule JSON, lift_targets JSON)")
+    con.execute("""INSERT INTO settings VALUES (1, 80, 75, '', 4, '{"1": "A"}', '{"bench": 80}')""")
+    con.commit()
+    con.close()
+    app = create_app(tmp_path, auto_backup=False)
+    with TestClient(app) as c:
+        c.cookies.set(COOKIE, app.state.token)
+        s = c.get("/api/v1/state").json()["settings"]
+        assert s["lifts"] == {"bench": 80} and s["theme"]["accent"] == "blue"
