@@ -5,6 +5,8 @@
     sets            one set of it: kg and reps (seconds for timed holds)
     settings        one row: weight goal, sessions per week, training days, lift targets, plan, nutrition
     meal_weeks      one row per week of meal prep
+    activities      runs and other activities imported from Strava's data export
+    meta            small app state (when Strava was last imported)
 """
 
 from collections.abc import Iterator
@@ -85,6 +87,30 @@ class MealWeek(Base):
     week: Mapped[str] = mapped_column(String(10), primary_key=True)  # the Monday, YYYY-MM-DD
     plan: Mapped[dict] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class Activity(Base):
+    """A run, ride, walk… imported from Strava's data export (added in 1.4), keyed on Strava's activity id."""
+    __tablename__ = "activities"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    date: Mapped[str] = mapped_column(String(10), index=True)  # local day it started
+    start: Mapped[str] = mapped_column(String(16))  # local time, YYYY-MM-DDTHH:MM
+    type: Mapped[str] = mapped_column(String(40))  # Strava's: Run, Trail Run, Ride, Walk…
+    name: Mapped[str] = mapped_column(String(200), default="")
+    distance: Mapped[float | None] = mapped_column(Float)  # metres
+    moving: Mapped[float | None] = mapped_column(Float)  # seconds
+    elapsed: Mapped[float | None] = mapped_column(Float)  # seconds
+    elevation: Mapped[float | None] = mapped_column(Float)  # metres climbed
+    avg_hr: Mapped[float | None] = mapped_column(Float)
+    max_hr: Mapped[float | None] = mapped_column(Float)
+    calories: Mapped[float | None] = mapped_column(Float)
+
+
+class Meta(Base):
+    """Odds and ends the app remembers (added in 1.4): {"strava": {"lastImport", "file", "fileTime"}}."""
+    __tablename__ = "meta"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
 
 
 def make_engine(db_path: Path) -> Engine:

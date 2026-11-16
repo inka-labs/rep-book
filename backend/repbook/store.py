@@ -18,7 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from . import __version__
-from .db import DEFAULT_SCHEDULE, DEFAULT_THEME, Day, ExerciseLog, MealWeek, SetLog, Settings
+from .db import DEFAULT_SCHEDULE, DEFAULT_THEME, Activity, Day, ExerciseLog, MealWeek, Meta, SetLog, Settings
 
 # The plan a new log starts with: Push / Pull / Legs / Upper and their exercises. Edited in the Workouts tab, and
 # then saved in settings.plan.
@@ -147,21 +147,76 @@ def delete_meals(db: Session, week: str) -> None:
     db.commit()
 
 
+# ---------- activities (Strava export) ----------
+
+ACTIVITY_FIELDS = {"date": "date", "start": "start", "type": "type", "name": "name", "distance": "distance",
+                   "moving": "moving", "elapsed": "elapsed", "elevation": "elevation", "avgHr": "avg_hr",
+                   "maxHr": "max_hr", "calories": "calories"}
+
+
+def activity_out(a: Activity) -> dict:
+    return {"id": a.id, **{k: getattr(a, col) for k, col in ACTIVITY_FIELDS.items()}}
+
+
+def all_activities(db: Session) -> list[dict]:
+    return [activity_out(a) for a in db.scalars(select(Activity).order_by(Activity.start))]
+
+
+def put_activities(db: Session, items: list[dict]) -> tuple[int, int]:
+    """Add or refresh activities by Strava id; returns (added, updated). Nothing is removed."""
+    have = {a.id: a for a in db.scalars(select(Activity))}
+    added = updated = 0
+    for item in items:
+        row = have.get(item["id"])
+        if row is None:
+            row = have[item["id"]] = Activity(id=item["id"])
+            db.add(row)
+            added += 1
+        else:
+            updated += 1
+        for k, col in ACTIVITY_FIELDS.items():
+            setattr(row, col, item.get(k) if k != "name" else (item.get(k) or ""))
+    db.commit()
+    return added, updated
+
+
+def delete_activities(db: Session) -> None:
+    db.execute(delete(Activity))
+    db.execute(delete(Meta).where(Meta.key == "strava"))
+    db.commit()
+
+
+def get_meta(db: Session, key: str) -> dict:
+    row = db.get(Meta, key)
+    return dict(row.value) if row else {}
+
+
+def set_meta(db: Session, key: str, value: dict) -> None:
+    row = db.get(Meta, key) or Meta(key=key)
+    row.value = value
+    db.add(row)
+    db.commit()
+
+
 # ---------- export / import ----------
 
 def export_all(db: Session) -> dict:
     return {"app": "rep-book", "version": __version__,
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "settings": settings_out(get_settings(db)), "days": [day_out(d) for d in all_days(db)],
-            "meals": all_meals(db)}
+            "meals": all_meals(db), "activities": all_activities(db)}
 
 
 def import_all(db: Session, data: dict) -> int:
-    """Replace everything with an export's contents; returns how many days were loaded."""
+    """Replace everything with an export's contents; returns how many days were loaded.
+
+    Exports from before 1.4 have no "activities": the Strava activities already here are kept then."""
     db.execute(delete(SetLog))
     db.execute(delete(ExerciseLog))
     db.execute(delete(Day))
     db.execute(delete(MealWeek))
+    if data.get("activities") is not None:
+        db.execute(delete(Activity))
     db.commit()
     put_settings(db, data.get("settings") or {})
     days = data.get("days") or []
@@ -169,6 +224,7 @@ def import_all(db: Session, data: dict) -> int:
         put_day(db, day["date"], day)
     for week, plan in (data.get("meals") or {}).items():
         put_meals(db, week, plan)
+    put_activities(db, data.get("activities") or [])
     return len(days)
 
 
@@ -187,6 +243,19 @@ def sets_csv(db: Session) -> str:
                 rows.append([day.date, workouts.get(day.workout or "", ""), exercises.get(log.exercise, log.exercise), s.set_no,
                              s.weight if s.weight is not None else "", s.reps if s.reps is not None else "",
                              "yes" if log.done else ""])
+    return _csv(rows)
+
+
+def activities_csv(db: Session) -> str:
+    rows = [["date", "start", "type", "name", "km", "moving_min", "pace_min_per_km", "elevation_m", "avg_hr",
+             "max_hr", "calories", "strava_id"]]
+    blank = lambda v, d=1: "" if v is None else round(v, d)  # noqa: E731
+    for a in all_activities(db):
+        km = a["distance"] / 1000 if a["distance"] else None
+        pace = a["moving"] / 60 / km if km and a["moving"] else None
+        rows.append([a["date"], a["start"], a["type"], a["name"], blank(km, 2),
+                     blank(a["moving"] / 60 if a["moving"] else None), blank(pace, 2), blank(a["elevation"], 0),
+                     blank(a["avgHr"], 0), blank(a["maxHr"], 0), blank(a["calories"], 0), a["id"]])
     return _csv(rows)
 
 

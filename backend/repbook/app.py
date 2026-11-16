@@ -4,7 +4,7 @@ import hmac
 import json
 import re
 from contextlib import asynccontextmanager
-from datetime import date as Date
+from datetime import date as Date, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from . import __version__, backup, paths, store
+from . import __version__, backup, paths, store, strava
 from .db import get_db, make_engine, make_sessionmaker
 from .security import COOKIE, session_token
 
@@ -136,6 +136,25 @@ class DayIn(BaseModel):
         return v
 
 
+class ActivityIn(BaseModel):
+    id: str = Field(pattern=r"^[0-9A-Za-z_-]{1,20}$")
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start: str = Field("", max_length=16)
+    type: str = Field("Activity", max_length=40)
+    name: str = Field("", max_length=200)
+    distance: float | None = Field(None, ge=0)
+    moving: float | None = Field(None, ge=0)
+    elapsed: float | None = Field(None, ge=0)
+    elevation: float | None = None
+    avgHr: float | None = Field(None, ge=0, le=300)
+    maxHr: float | None = Field(None, ge=0, le=300)
+    calories: float | None = Field(None, ge=0)
+
+
+class StravaFileIn(BaseModel):
+    name: str = Field(max_length=100)
+
+
 class ThemeIn(BaseModel):
     mode: Literal["system", "light", "dark"] = "system"
     accent: Literal["blue", "teal", "violet", "orange", "graphite"] = "blue"
@@ -214,8 +233,8 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
     def state(db: Session = Depends(get_db)):
         return {"settings": store.settings_out(store.get_settings(db)),
                 "days": {d.date: store.day_out(d) for d in store.all_days(db)},
-                "meals": store.all_meals(db), "food": store.FOOD,
-                "dataFolder": str(data), "version": __version__}
+                "meals": store.all_meals(db), "food": store.FOOD, "activities": store.all_activities(db),
+                "strava": strava_status(db), "dataFolder": str(data), "version": __version__}
 
     @app.put("/api/v1/days/{date}")
     def save_day(date: str, body: DayIn, db: Session = Depends(get_db)):
@@ -246,6 +265,58 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
         store.delete_meals(db, _check_date(week))
         return Response(status_code=204)
 
+    # ----- Strava (its free data export) -----
+
+    def strava_status(db: Session) -> dict:
+        """When Strava was last imported, and a newer export waiting in Downloads (if there is one)."""
+        meta = store.get_meta(db, "strava")
+        newest = strava.newest_export()
+        waiting = None
+        if newest and newest.stat().st_mtime > meta.get("fileTime", 0) + 1:
+            waiting = {"name": newest.name,
+                       "modified": datetime.fromtimestamp(newest.stat().st_mtime).isoformat(timespec="minutes")}
+        return {"lastImport": meta.get("lastImport"), "file": meta.get("file"), "waiting": waiting,
+                "downloads": str(strava.downloads_dir())}
+
+    def strava_import(db: Session, f, name: str, file_time: float | None) -> dict:
+        try:
+            items = strava.read_export(f, name)
+        except strava.StravaError as e:
+            raise HTTPException(400, str(e))
+        added, updated = store.put_activities(db, items)
+        meta = store.get_meta(db, "strava")
+        newest = strava.newest_export()
+        if file_time is None and newest and newest.name == name:  # picked by hand from Downloads
+            file_time = newest.stat().st_mtime
+        store.set_meta(db, "strava", {"lastImport": datetime.now().isoformat(timespec="minutes"), "file": name,
+                                      "fileTime": max(file_time or 0, meta.get("fileTime", 0))})
+        runs = [i for i in items if i["type"] in strava.RUN_TYPES]
+        return {"added": added, "updated": updated, "runs": len(runs),
+                "latestRun": max((i["date"] for i in runs), default=None), "strava": strava_status(db)}
+
+    @app.get("/api/v1/strava")
+    def strava_get(db: Session = Depends(get_db)):
+        return strava_status(db)
+
+    @app.post("/api/v1/strava/import")
+    def strava_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+        return strava_import(db, file.file, file.filename or "", None)
+
+    @app.post("/api/v1/strava/import-downloads")
+    def strava_from_downloads(body: StravaFileIn, db: Session = Depends(get_db)):
+        if not strava.EXPORT_NAME.match(body.name):
+            raise HTTPException(400, "That isn't a Strava export file name.")
+        path = strava.downloads_dir() / body.name
+        if not path.is_file():
+            raise HTTPException(400, f"{body.name} isn't in your Downloads folder any more.")
+        with path.open("rb") as f:
+            return strava_import(db, f, body.name, path.stat().st_mtime)
+
+    @app.delete("/api/v1/strava", status_code=204)
+    def strava_forget(db: Session = Depends(get_db)):
+        store.delete_activities(db)
+        return Response(status_code=204)
+
     # ----- export / import -----
 
     def _download(text: str, name: str, media: str) -> Response:
@@ -259,6 +330,10 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
     @app.get("/api/v1/export/sets.csv")
     def export_sets(db: Session = Depends(get_db)):
         return _download(store.sets_csv(db), f"rep-book-sets-{Date.today().isoformat()}.csv", "text/csv")
+
+    @app.get("/api/v1/export/activities.csv")
+    def export_activities(db: Session = Depends(get_db)):
+        return _download(store.activities_csv(db), f"rep-book-runs-{Date.today().isoformat()}.csv", "text/csv")
 
     @app.get("/api/v1/export/days.csv")
     def export_days(db: Session = Depends(get_db)):
@@ -280,8 +355,12 @@ def create_app(data_dir: Path | None = None, *, lan: bool = False, auto_backup: 
         meals = {}
         for week, plan in (raw.get("meals") or {}).items():
             meals[_check_date(str(week))] = MealWeekIn.model_validate(plan).model_dump()
+        activities = None
+        if isinstance(raw.get("activities"), list):
+            activities = [ActivityIn.model_validate(a).model_dump() for a in raw["activities"]]
         before = backup.make_backup(data, "before-import")
-        count = store.import_all(db, {"settings": settings.model_dump(), "days": days, "meals": meals})
+        count = store.import_all(db, {"settings": settings.model_dump(), "days": days, "meals": meals,
+                                      "activities": activities})
         return {"days": count, "backup": before["name"]}
 
     # ----- backups -----

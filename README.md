@@ -15,6 +15,15 @@ recipes built on Kenyan staples, sizes the portions to your calories, and gives 
 shopping list with KES costs. Ingredients, nutrition and estimated prices are in
 [backend/repbook/food.json](backend/repbook/food.json); prices can be edited in the app.
 
+**Runs from Strava** come in for free through Strava's own data export, with no API key or subscription
+needed. On strava.com go to Settings → My Account → Download or Delete Your Account → Request Your Archive. Strava
+emails a link to `export_<id>.zip`. Download it, and Rep Book notices it in your Downloads folder and offers to
+import it (or pick the file in the Data tab). Each export holds your whole history, and Rep Book adds only the
+activities it doesn't already have (matched on Strava's activity id). Doing this once a week keeps it current, and
+Rep Book reminds you when the last import is a week old. Runs show in the daily log, the week and year views, and a
+running-per-week chart in Progress. Only `activities.csv` in the zip is read
+([backend/repbook/strava.py](backend/repbook/strava.py)).
+
 ## How it's built
 
 One Python process serves everything at <http://127.0.0.1:8775>, in the same way as Vina Tsama and Ecoscope Studio:

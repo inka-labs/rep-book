@@ -285,6 +285,17 @@ a.btn{text-decoration:none;display:inline-block}
 .btn.small{padding:5px 10px;font-size:12.5px}
 .msg{font-size:13px}
 .msg.ok{color:var(--good)} .msg.bad{color:var(--bad)}
+.nudge{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px 14px;font-size:13.5px}
+.acts{display:grid;gap:10px}
+.act{display:grid;gap:3px}
+.acts .act+.act{border-top:1px solid var(--line);padding-top:10px}
+.act-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.act-m{font-size:12.5px;color:var(--muted)}
+.cell.run,.sw.sw-run{position:relative}
+.cell.run::after,.sw.sw-run::after{content:"";position:absolute;right:2px;top:2px;width:4px;height:4px;border-radius:50%;background:currentColor}
+.sw.sw-run{background:var(--surface-2);color:var(--muted)}
+.steps{margin:0;padding-left:20px;display:grid;gap:6px;font-size:13.5px}
+.steps a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 /* theme picker */
@@ -356,6 +367,7 @@ try{applyTheme(JSON.parse(localStorage.getItem(THEME_LS)))}catch(e){applyTheme()
   </header>
 
   <section class="summary" id="summary" aria-label="Summary"></section>
+  <div class="nudge" id="nudge" role="status" hidden></div>
 
   <nav class="tabs" role="tablist" id="tabs">
     <button role="tab" data-tab="log" aria-selected="true">Daily log</button>
@@ -424,7 +436,7 @@ const tname=t=>esc(tnameRaw(t));
 const tfull=t=>esc(PLAN[t]?PLAN[t].name:OTHER[t]?OTHER[t].name:"");
 
 /* ---------- state ---------- */
-const S={mode:"loading",days:{},meals:{},food:null,mealWeek:null,settings:clone(DEFAULT_SETTINGS),tab:"log",date:todayIso(),
+const S={mode:"loading",days:{},meals:{},acts:[],strava:{},stravaMsg:null,nudgeHidden:false,food:null,mealWeek:null,settings:clone(DEFAULT_SETTINGS),tab:"log",date:todayIso(),
   weekOf:iso(weekStart(new Date())),year:new Date().getFullYear(),liftEx:"bench",readOnly:false};
 
 const planned=ds=>S.settings.schedule[String(parse(ds).getDay())]||null;
@@ -442,6 +454,7 @@ function status(ds){
   const d=S.days[ds],t=typeOf(ds),today=todayIso();
   if(isSession(d))return "done";
   if(d&&d.done&&d.type==="cardio")return "cardio";
+  if(ACTS[ds]&&!isWorkout(t))return "cardio";
   if(d&&d.type==="rest")return "rest";
   if(isWorkout(t)){if(ds<today)return ds>=trackingStart()?"missed":"off";if(ds===today)return "today";return "planned"}
   return "off";
@@ -458,6 +471,28 @@ function lastFor(exId,before){
 }
 function weekCount(ws){let n=0;for(let i=0;i<7;i++)if(isSession(S.days[iso(addDays(ws,i))]))n++;return n}
 function bwSeries(){return sortedDates().filter(d=>S.days[d].bw!=null).map(d=>({ds:d,x:parse(d).getTime(),y:S.days[d].bw}))}
+
+/* ---------- activities from Strava's data export (Data tab) ---------- */
+const RUN_TYPES=new Set(["Run","Trail Run","Virtual Run"]);
+let ACTS={}; // date -> activities that day
+function indexActs(){ACTS={};for(const a of S.acts)(ACTS[a.date]||=[]).push(a)}
+const isRun=a=>RUN_TYPES.has(a.type);
+const fmtKm=a=>a.distance?(a.distance/1000).toFixed(a.distance>=10000?1:2):null;
+function dur(sec){const t=Math.round(sec||0),h=Math.floor(t/3600),m=Math.floor(t%3600/60),x=t%60;return h?`${h}:${pad(m)}:${pad(x)}`:`${m}:${pad(x)}`}
+function pace(a){if(!a.distance||!a.moving)return null;const t=Math.round(a.moving/(a.distance/1000));return `${Math.floor(t/60)}:${pad(t%60)}`}
+function actShort(a){const k=fmtKm(a);return `${esc(a.type)} ${k?`<span class="num">${k}</span> km`:`<span class="num">${dur(a.moving||a.elapsed)}</span>`}`}
+function actLine(a){
+  const p=[],k=fmtKm(a),pc=isRun(a)&&pace(a);
+  if(k)p.push(`<span class="num">${k}</span>&nbsp;km`);
+  if(a.moving||a.elapsed)p.push(`<span class="num">${dur(a.moving||a.elapsed)}</span>`);
+  if(pc)p.push(`<span class="num">${pc}</span>&nbsp;/km`);
+  if(a.avgHr)p.push(`avg&nbsp;HR&nbsp;<span class="num">${Math.round(a.avgHr)}</span>`);
+  if(a.elevation)p.push(`<span class="num">${Math.round(a.elevation)}</span>&nbsp;m&nbsp;climbed`);
+  return p.join(" · ");
+}
+function runsBetween(d0,d1){const r=S.acts.filter(a=>isRun(a)&&a.date>=d0&&a.date<=d1);return{n:r.length,km:r.reduce((t,a)=>t+(a.distance||0),0)/1000}}
+const ranOnly=(ds,d)=>!!ACTS[ds]&&!(d&&d.done&&d.type==="cardio"); // a cardio day that comes from Strava alone
+const fmtWhen=s=>s?new Date(s).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
 
 /* ---------- persistence: the Rep Book server on this computer ---------- */
 const dirty=new Set(),timers={},inflight={},again={};
@@ -505,7 +540,7 @@ async function load(){
   try{
     const st=await api("/state");
     S.settings={...clone(DEFAULT_SETTINGS),...st.settings};applyTheme(S.settings.theme);rebuildPlan();
-    S.days=st.days;S.meals=st.meals||{};S.food=st.food;S.dataFolder=st.dataFolder;S.version=st.version;
+    S.days=st.days;S.meals=st.meals||{};S.food=st.food;S.acts=st.activities||[];S.strava=st.strava||{};indexActs();S.dataFolder=st.dataFolder;S.version=st.version;
     setStatus("Saved on this computer","ok");
   }catch(e){if(!S.signedOut)setStatus(`Couldn't load your log (${e.message}). Is Rep Book still running?`,"bad")}
   renderAll();
@@ -541,6 +576,17 @@ function renderSummary(){
      <span class="sub">${goal!=null?`${fmtN(goal)} kg target · ${goalTxt}`:`<button class="linkbtn" style="padding:0" data-goto="targets">Set a goal weight</button>`} · <button class="linkbtn" style="padding:0" data-goto="meals">Change goal</button></span></div>
    <div class="tile"><span class="lab">Next session</span><span class="big">${next?(next===today?"Today":fd(next,{weekday:"short",day:"numeric"})):"–"}</span>
      <span class="sub">${next?`<span class="chip t-${nt}"><span class="dot"></span>${tname(nt)}</span> ${tfull(nt)}`:"No sessions planned"}</span></div>`;
+  renderNudge();
+}
+// The bar under the summary: a new Strava export waiting in Downloads, or a weekly reminder to get one
+function renderNudge(){
+  const el=$("#nudge"),st=S.strava||{};let html="";
+  const since=st.lastImport?Math.floor((Date.now()-new Date(st.lastImport))/864e5):null;
+  if(S.stravaMsg)html=`<span class="msg ${S.stravaMsg.kind}">${esc(S.stravaMsg.text)}</span><button class="btn ghost small" data-act="nudge-close">OK</button>`;
+  else if(st.waiting)html=`<span>New Strava export in your Downloads: <b>${esc(st.waiting.name)}</b> (${fmtWhen(st.waiting.modified)}).</span><button class="btn small" data-act="strava-dl">Import runs</button>`;
+  else if(since!=null&&since>=7&&!S.nudgeHidden)html=`<span>Runs were last imported from Strava ${since} days ago.</span>
+    <span class="row"><button class="btn ghost small" data-goto="data">Get this week's runs</button><button class="linkbtn" data-act="nudge-hide">Not now</button></span>`;
+  el.innerHTML=html;el.hidden=!html;
 }
 
 /* ---------- render: daily log ---------- */
@@ -610,6 +656,9 @@ function renderLog(){
      </div>
      <div class="side">
        <label class="complete ${d?.done?"on":""}" ${t==="rest"||!t?"hidden":""}><input type="checkbox" id="dayDone" data-act="done" ${d?.done?"checked":""}> Session complete</label>
+       ${ACTS[ds]?`<div class="card"><div class="card-head"><h3>From Strava</h3></div><div class="acts">${ACTS[ds].map(a=>`<div class="act">
+         <div class="act-top"><b>${esc(a.name||a.type)}</b><span class="tag">${esc(a.type)}</span></div>
+         <div class="act-m">${actLine(a)}${a.start?` · started <span class="num">${a.start.slice(11)}</span>`:""}</div></div>`).join("")}</div></div>`:""}
        <div class="card" style="display:grid;gap:12px">
          <h3>Body &amp; session</h3>
          <div class="two">
@@ -634,16 +683,17 @@ function renderWeek(){
   for(let i=0;i<7;i++){
     const ds=iso(addDays(ws,i)),d=S.days[ds],t=typeOf(ds),st=status(ds);
     const v=volume(d);vol+=v;mins+=d?.minutes||0;if(d?.bw!=null)bws.push(d.bw);
-    const showT=t&&(st!=="off");
-    cols+=`<button class="wd ${showT?"t-"+t:""} ${ds===today?"is-today":""}" data-date="${ds}" aria-label="Open ${fd(ds,{weekday:"long",day:"numeric",month:"long"})}">
+    const ct=st==="cardio"&&ranOnly(ds,d)&&!isWorkout(t)?"cardio":t,showT=ct&&(st!=="off");
+    cols+=`<button class="wd ${showT?"t-"+ct:""} ${ds===today?"is-today":""}" data-date="${ds}" aria-label="Open ${fd(ds,{weekday:"long",day:"numeric",month:"long"})}">
       <div class="d"><span class="wn">${fd(ds,{weekday:"short"})}</span><span class="dn">${parse(ds).getDate()}</span></div>
-      ${showT?`<span class="chip t-${t}"><span class="dot"></span>${tname(t)}</span>`:`<span class="chip" style="background:none;padding-left:0;color:var(--muted)">Off</span>`}
+      ${showT?`<span class="chip t-${ct}"><span class="dot"></span>${tname(ct)}</span>`:`<span class="chip" style="background:none;padding-left:0;color:var(--muted)">Off</span>`}
       <span class="state ${st}">${STATE_TXT[st]}</span>
-      <span class="m">${v?`<span>Vol <span class="num">${Math.round(v).toLocaleString("en-GB")}</span> kg</span>`:""}${d?.minutes?`<span><span class="num">${d.minutes}</span> min</span>`:""}${d?.bw!=null?`<span><span class="num">${fmtN(d.bw)}</span> kg body</span>`:""}</span>
+      <span class="m">${(ACTS[ds]||[]).map(a=>`<span>${actShort(a)}</span>`).join("")}${v?`<span>Vol <span class="num">${Math.round(v).toLocaleString("en-GB")}</span> kg</span>`:""}${d?.minutes?`<span><span class="num">${d.minutes}</span> min</span>`:""}${d?.bw!=null?`<span><span class="num">${fmtN(d.bw)}</span> kg body</span>`:""}</span>
     </button>`;
   }
   const n=weekCount(ws),end=addDays(ws,6);
   const isThis=S.weekOf===iso(weekStart(new Date()));
+  const run=runsBetween(iso(ws),iso(end));
   $("#p-week").innerHTML=`
     <div class="log-head">
       <div class="weeknav"><button class="icon-btn" data-act="wprev" aria-label="Previous week">‹</button>
@@ -658,6 +708,7 @@ function renderWeek(){
       <div class="stat"><div class="v num-d">${Math.round(vol).toLocaleString("en-GB")}<span class="muted" style="font-size:15px"> kg</span></div><div class="k">Total volume lifted</div></div>
       <div class="stat"><div class="v">${mins||"–"}${mins?`<span class="muted" style="font-size:15px"> min</span>`:""}</div><div class="k">Time trained</div></div>
       <div class="stat"><div class="v">${bws.length?fmtN(bws.reduce((a,b)=>a+b,0)/bws.length):"–"}${bws.length?`<span class="muted" style="font-size:15px"> kg</span>`:""}</div><div class="k">Average body weight</div></div>
+      ${S.acts.length?`<div class="stat"><div class="v">${run.n?fmtN(run.km):"–"}${run.n?`<span class="muted" style="font-size:15px"> km</span>`:""}</div><div class="k">Running · ${run.n} run${run.n===1?"":"s"}</div></div>`:""}
     </div></div>`;
 }
 function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const y=new Date(Date.UTC(t.getUTCFullYear(),0,1));return Math.ceil(((t-y)/86400000+1)/7)}
@@ -675,7 +726,8 @@ function renderYear(){
       const ds=iso(new Date(Y,m,dd)),d=S.days[ds],st=status(ds),t=typeOf(ds);
       let cls="cell",txt=dd,label=fd(ds,{weekday:"short",day:"numeric",month:"short"});
       if(st==="done"){cls+=` s t-${d.type}`;txt=esc(tnameRaw(d.type)[0]||"•");label+=` · ${tnameRaw(d.type)} done`;sessions++;counts[d.type]=(counts[d.type]||0)+1}
-      else if(st==="cardio"){cls+=" s t-cardio";txt="C";label+=" · cardio";cardio++}
+      else if(st==="cardio"){cls+=" s t-cardio";txt=ranOnly(ds,d)&&ACTS[ds].some(isRun)?"R":"C";label+=" · cardio";cardio++}
+      if(ACTS[ds]){label+=" · "+ACTS[ds].map(a=>`${a.type}${fmtKm(a)?" "+fmtKm(a)+" km":""}`).join(", ");if(st!=="cardio")cls+=" run"}
       else if(st==="missed"){cls+=` miss t-${t}`;label+=` · ${tnameRaw(t)} missed`}
       else if(st==="planned"||st==="today"){cls+=" plan";label+=` · ${tnameRaw(t)} planned`}
       if(isWorkout(planned(ds))&&ds<=today&&ds>=trackingStart()){plannedPast++;if(isSession(d))donePlanned++}
@@ -690,10 +742,11 @@ function renderYear(){
     const ok=weekCount(ws)>=target;if(ok){hit++;streak++;best=Math.max(best,streak)}else if(iso(addDays(ws,6))<today)streak=0;
   }
   const shown=[...TYPES,...Object.keys(counts).filter(t=>!TYPES.includes(t))];
+  const yr=runsBetween(`${Y}-01-01`,`${Y}-12-31`);
   $("#p-year").innerHTML=`
     <div class="log-head">
       <div class="weeknav"><button class="icon-btn" data-act="yprev" aria-label="Previous year">‹</button><h2>${Y}</h2><button class="icon-btn" data-act="ynext" aria-label="Next year">›</button></div>
-      <div class="legend">${shown.map(t=>`<span class="t-${t}"><i class="sw"></i>${tname(t)}</span>`).join("")}<span class="t-cardio"><i class="sw"></i>Cardio</span><span><i class="sw miss"></i>Missed</span></div>
+      <div class="legend">${shown.map(t=>`<span class="t-${t}"><i class="sw"></i>${tname(t)}</span>`).join("")}<span class="t-cardio"><i class="sw"></i>Cardio (R: a Strava run)</span>${S.acts.length?`<span><i class="sw sw-run"></i>Ran that day too</span>`:""}<span><i class="sw miss"></i>Missed</span></div>
     </div>
     <div class="card"><div class="stats">
       <div class="stat"><div class="v">${sessions}</div><div class="k">Gym sessions · ${shown.map(t=>`${tname(t)} ${counts[t]||0}`).join(" · ")}</div></div>
@@ -701,6 +754,7 @@ function renderYear(){
       <div class="stat"><div class="v">${hit}</div><div class="k">Weeks with ${target}+ sessions</div></div>
       <div class="stat"><div class="v">${best}</div><div class="k">Best streak (weeks)</div></div>
       <div class="stat"><div class="v">${cardio}</div><div class="k">Cardio days</div></div>
+      ${S.acts.length?`<div class="stat"><div class="v">${yr.n?fmtN(yr.km,0):"–"}${yr.n?`<span class="muted" style="font-size:15px"> km</span>`:""}</div><div class="k">Run · ${yr.n} run${yr.n===1?"":"s"} from Strava</div></div>`:""}
     </div></div>
     <div class="card"><div class="year">${months}</div></div>`;
 }
@@ -757,15 +811,17 @@ function lineChart(host,pts,{goal=null,dec=1,unit="kg",goalLabel="Goal"}={}){
     <rect x="${m.l}" y="0" width="${W-m.l-m.r}" height="${H}" fill="transparent"/></svg>`);
   attachHover(host,host.querySelector("svg"),W,P,p=>`${new Date(p.x).toLocaleDateString("en-GB",{day:"numeric",month:"short"})} · <b>${fmtN(p.y,dec)} ${unit}</b>${p.note?" · "+esc(p.note):""}`);
 }
-function barChart(host,bars,{target}){
+function barChart(host,bars,{target=null,whole=true,aria="Sessions per week",tip=null}={}){
   host.innerHTML="";
   const W=Math.max(300,host.clientWidth||600),H=200,m={l:28,r:58,t:14,b:26};
-  const hi=Math.max(target,...bars.map(b=>b.v),1);
-  const top=Math.ceil(hi);
+  const hi=Math.max(target??0,...bars.map(b=>b.v),1);
+  let top,ticks=[];
+  if(whole&&hi<=14){top=Math.ceil(hi);for(let v=0;v<=top;v+=top>6?2:1)ticks.push(v)}  // sessions: 0, 1, 2…
+  else{const t=niceTicks(0,hi,4);top=t.hi;ticks=t.ticks}
   const Y=v=>m.t+(top-v)/top*(H-m.t-m.b),base=H-m.b;
   const bw=(W-m.l-m.r)/bars.length,gap=Math.max(2,bw*.28);
   let g="";
-  for(let v=0;v<=top;v+=top>6?2:1)g+=`<line class="grid" x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v}</text>`;
+  for(const v of ticks)g+=`<line class="grid" x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${fmtN(v,1)}</text>`;
   const P=[];
   bars.forEach((b,i)=>{
     const x=m.l+i*bw+gap/2,w=bw-gap,y=Y(b.v),h=base-y,r=Math.min(4,w/2,h);
@@ -773,9 +829,9 @@ function barChart(host,bars,{target}){
     if(i%2===(bars.length-1)%2||bars.length<=8)g+=`<text x="${x+w/2}" y="${H-6}" text-anchor="middle">${b.label}</text>`;
     P.push({...b,px:x+w/2,py:Math.min(y,base-2)});
   });
-  g+=`<line class="goal" x1="${m.l}" x2="${W-m.r}" y1="${Y(target)}" y2="${Y(target)}"/><text class="goal-l" x="${W-m.r+6}" y="${Y(target)+4}">Target ${target}</text>`;
-  host.insertAdjacentHTML("beforeend",`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Sessions per week">${g}<line class="axis" x1="${m.l}" x2="${W-m.r}" y1="${base}" y2="${base}"/><rect x="${m.l}" y="0" width="${W-m.l-m.r}" height="${H}" fill="transparent"/></svg>`);
-  attachHover(host,host.querySelector("svg"),W,P,p=>`Week of ${p.full} · <b>${p.v} session${p.v===1?"":"s"}</b>${p.cur?" · in progress":""}`);
+  if(target!=null)g+=`<line class="goal" x1="${m.l}" x2="${W-m.r}" y1="${Y(target)}" y2="${Y(target)}"/><text class="goal-l" x="${W-m.r+6}" y="${Y(target)+4}">Target ${target}</text>`;
+  host.insertAdjacentHTML("beforeend",`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${aria}">${g}<line class="axis" x1="${m.l}" x2="${W-m.r}" y1="${base}" y2="${base}"/><rect x="${m.l}" y="0" width="${W-m.l-m.r}" height="${H}" fill="transparent"/></svg>`);
+  attachHover(host,host.querySelector("svg"),W,P,tip||(p=>`Week of ${p.full} · <b>${p.v} session${p.v===1?"":"s"}</b>${p.cur?" · in progress":""}`));
 }
 
 /* ---------- render: progress ---------- */
@@ -803,6 +859,7 @@ function renderProgress(){
     <div class="charts">
       <div class="card"><div class="card-head"><h3>Body weight</h3><span class="muted">kg${S.settings.goalWeight!=null?" · dashed line is your goal":""}</span></div><div class="chart" id="c-bw"></div></div>
       <div class="card"><div class="card-head"><h3>Sessions per week</h3><span class="muted">last 12 weeks</span></div><div class="chart" id="c-wk"></div></div>
+      ${S.acts.some(isRun)?`<div class="card wide"><div class="card-head"><h3>Running per week</h3><span class="muted">km · last 12 weeks, from Strava</span></div><div class="chart" id="c-run"></div></div>`:""}
       <div class="card wide"><div class="card-head"><h3>Lift progress</h3>
         <select class="inp" id="liftSel" style="width:auto;max-width:100%">${opts}</select></div>
         <div class="note" style="margin:-4px 0 10px">Heaviest set each session${S.settings.lifts?.[S.liftEx]?" · dashed line is your target":""}</div>
@@ -822,6 +879,11 @@ function drawCharts(){
   const now=weekStart(new Date()),bars=[];
   for(let i=11;i>=0;i--){const ws=addDays(now,-7*i);bars.push({v:weekCount(ws),label:ws.toLocaleDateString("en-GB",{day:"numeric",month:"numeric"}),full:ws.toLocaleDateString("en-GB",{day:"numeric",month:"short"}),cur:i===0})}
   barChart($("#c-wk"),bars,{target:S.settings.sessionsPerWeek||4});
+  if($("#c-run")){
+    const rb=bars.map((b,i)=>{const ws=addDays(now,-7*(11-i)),r=runsBetween(iso(ws),iso(addDays(ws,6)));return{...b,v:Math.round(r.km*10)/10,n:r.n}});
+    barChart($("#c-run"),rb,{whole:false,aria:"Running distance per week",
+      tip:p=>`Week of ${p.full} · <b>${fmtN(p.v)} km</b> · ${p.n} run${p.n===1?"":"s"}${p.cur?" · in progress":""}`});
+  }
   const lp=sortedDates().map(ds=>{const s=topSet(S.days[ds].ex?.[S.liftEx]);return s?{x:parse(ds).getTime(),y:s.w,note:s.r!=null?`${s.r} reps`:""}:null}).filter(Boolean);
   const hl=$("#c-lift");
   if(lp.length)lineChart(hl,lp,{goal:S.settings.lifts?.[S.liftEx]??null,goalLabel:"Target"});
@@ -1322,6 +1384,7 @@ function renderData(){
       <div class="path" id="dataPath">${esc(S.dataFolder||"…")}</div>
       <p class="note" style="margin:0">Everything you log is saved in a database (<span class="num">db.sqlite3</span>) in this folder on this computer. Rep Book backs it up there every day and keeps the last 30 backups. To keep a copy somewhere else, export it below and save the file to Google Drive, OneDrive or a USB stick.</p>
     </div>
+    ${stravaCard()}
     <div class="card" style="display:grid;gap:12px">
       <div class="card-head" style="margin:0"><h3>Backups</h3><button class="btn" data-act="backup">Back up now</button></div>
       ${D.backups===null?`<p class="note">Loading backups…</p>`:rows?`<div class="tablewrap"><table><thead><tr><th>Made</th><th>Why</th><th class="r">Size</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
@@ -1334,6 +1397,7 @@ function renderData(){
         <a class="btn" href="/api/v1/export.json" download>Everything (.json)</a>
         <a class="btn ghost" href="/api/v1/export/sets.csv" download>Sets (.csv)</a>
         <a class="btn ghost" href="/api/v1/export/days.csv" download>Days and body weight (.csv)</a>
+        ${S.acts.length?`<a class="btn ghost" href="/api/v1/export/activities.csv" download>Strava activities (.csv)</a>`:""}
       </div>
       <p class="note" style="margin:0">The .json file can be imported back into Rep Book, on this computer or another one. The .csv files open in Excel or Google Sheets.</p>
     </div>
@@ -1345,14 +1409,62 @@ function renderData(){
     </div>
     <p class="note">Rep Book ${esc(S.version||"")}</p>`;
 }
+function stravaCard(){
+  const st=S.strava||{},runs=S.acts.filter(isRun),last=runs[runs.length-1];
+  const have=S.acts.length?`<b>${runs.length}</b> run${runs.length===1?"":"s"} imported${S.acts.length>runs.length?` (${S.acts.length} activities in all)`:""}${last?` · latest run ${fd(last.date,{day:"numeric",month:"short",year:"numeric"})}`:""} · last import ${fmtWhen(st.lastImport)}`
+    :"No runs imported yet.";
+  return `<div class="card" style="display:grid;gap:12px">
+    <div class="card-head" style="margin:0"><h3>Runs from Strava</h3><span class="muted">free, from Strava's data export</span></div>
+    <p style="margin:0">${have}</p>
+    ${st.waiting?`<div class="row"><span>Found <b>${esc(st.waiting.name)}</b> in your Downloads (${fmtWhen(st.waiting.modified)}).</span><button class="btn" data-act="strava-dl">Import it</button></div>`:""}
+    <div class="row"><input type="file" id="stravaFile" accept=".zip,.csv" class="inp" style="width:auto;max-width:100%" aria-label="Strava export (.zip or activities.csv)"></div>
+    <ol class="steps">
+      <li>On strava.com open Settings → My Account → <a href="https://www.strava.com/athlete/delete_your_account" target="_blank" rel="noopener">Download or Delete Your Account</a>, click <b>Get Started</b>, then <b>Request Your Archive</b>. That's all you need on that page: don't delete anything.</li>
+      <li>Strava emails you a link to a .zip file. It can take a few hours.</li>
+      <li>Download it. Rep Book spots it in your Downloads folder and offers to import it, or pick it above.</li>
+    </ol>
+    <p class="note" style="margin:0">Every export has your whole history; Rep Book adds the activities it doesn't have yet, so do this once a week. Runs show in the daily log, the week and year views and Progress. Rep Book reminds you when the last import is a week old.</p>
+    ${S.acts.length?(D.confirm==="strava"?`<span class="confirm"><span>Remove every activity imported from Strava?</span><button class="btn danger small" data-act="strava-forget-yes">Remove</button><button class="btn ghost small" data-act="cancel">Cancel</button></span>`
+      :`<div><button class="linkbtn" style="padding:0" data-act="strava-forget">Remove the Strava activities from Rep Book</button></div>`):""}
+  </div>`;
+}
+// Import a Strava export: the one found in Downloads, or a file picked by hand. Adds, never removes.
+async function stravaImport(file,fromNudge){
+  let msg,kind="ok";
+  setStatus("Importing from Strava…");
+  try{
+    let r;
+    if(file){const f=new FormData();f.append("file",file);r=await api("/strava/import",{method:"POST",body:f})}
+    else r=await api("/strava/import-downloads",{method:"POST",body:JSON.stringify({name:S.strava.waiting.name})});
+    await load();
+    msg=r.added?`Added ${r.added} new activit${r.added===1?"y":"ies"} from Strava`:"Nothing new in that export: every activity in it was already here";
+    if(r.latestRun)msg+=`. Latest run: ${fd(r.latestRun,{weekday:"short",day:"numeric",month:"short"})}`;
+    msg+=".";
+  }catch(err){msg=`Couldn't import from Strava: ${err.message}`;kind="bad";setStatus("Saved on this computer","ok")}
+  if(fromNudge)S.stravaMsg={text:msg,kind};else{D.msg=msg;D.msgKind=kind}
+  renderNudge();if(S.tab==="data")renderData();
+}
+// The page may stay open all week: look in Downloads again when it comes back into view
+async function refreshStrava(){try{S.strava=await api("/strava");renderNudge();if(S.tab==="data"&&!$("#p-data").contains(document.activeElement))renderData()}catch(e){}}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!S.signedOut)refreshStrava()});
+$("#nudge").addEventListener("click",e=>{
+  const b=e.target.closest("button");if(!b)return;
+  if(b.dataset.goto){setTab(b.dataset.goto);return}
+  if(b.dataset.act==="strava-dl"){b.disabled=true;stravaImport(null,true)}
+  if(b.dataset.act==="nudge-close"){S.stravaMsg=null;renderNudge()}
+  if(b.dataset.act==="nudge-hide"){S.nudgeHidden=true;renderNudge()}
+});
 $("#p-data").addEventListener("click",async e=>{
   const b=e.target.closest("button[data-act]");if(!b)return;const act=b.dataset.act;
+  if(act==="strava-dl"){b.disabled=true;stravaImport(null,false);return}
+  if(act==="strava-forget"){D.confirm="strava";renderData();return}
   const done=(msg,kind)=>{D.msg=msg;D.msgKind=kind;D.confirm=null;D.importFile=null;loadBackups()};
   if(act==="cancel"){D.confirm=null;D.importFile=null;const f=$("#importFile");if(f)f.value="";renderData();return}
   if(act==="restore"){D.confirm=b.dataset.name;renderData();return}
   b.disabled=true;
   try{
     if(act==="backup"){await api("/backups",{method:"POST"});done("Backup made.","ok")}
+    if(act==="strava-forget-yes"){await api("/strava",{method:"DELETE"});await load();done("Removed the Strava activities. Import an export again to bring them back.","ok")}
     if(act==="restore-yes"){const r=await api(`/backups/${encodeURIComponent(b.dataset.name)}/restore`,{method:"POST"});
       await load();done(`Restored. Your log as it was before is in the backup made just now (${r.backup}).`,"ok")}
     if(act==="import-yes"&&D.importFile){const fdat=new FormData();fdat.append("file",D.importFile);
@@ -1360,7 +1472,10 @@ $("#p-data").addEventListener("click",async e=>{
       done(`Imported ${r.days} day${r.days===1?"":"s"}. Your log as it was before is in a backup (${r.backup}).`,"ok")}
   }catch(err){done(`That didn't work: ${err.message}`,"bad")}
 });
-$("#p-data").addEventListener("change",e=>{if(e.target.id==="importFile"){D.importFile=e.target.files[0]||null;D.msg="";renderData()}});
+$("#p-data").addEventListener("change",e=>{
+  if(e.target.id==="importFile"){D.importFile=e.target.files[0]||null;D.msg="";renderData()}
+  if(e.target.id==="stravaFile"&&e.target.files[0])stravaImport(e.target.files[0],false);
+});
 
 let rz;window.addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(drawCharts,150)});
 boot();

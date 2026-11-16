@@ -207,3 +207,89 @@ def test_nutrition_and_meal_weeks(client):
     client.delete("/api/v1/meals/2026-11-16")
     client.post("/api/v1/import", files={"file": ("x.json", io.BytesIO(json.dumps(data).encode()))})
     assert "2026-11-16" in client.get("/api/v1/state").json()["meals"]
+
+
+# ---------- Strava data export ----------
+
+STRAVA_HEADER = ("Activity ID,Activity Date,Activity Name,Activity Type,Activity Description,Elapsed Time,Distance,"
+                 "Max Heart Rate,Relative Effort,Commute,Activity Private Note,Activity Gear,Filename,Athlete Weight,"
+                 "Bike Weight,Elapsed Time,Moving Time,Distance,Max Speed,Average Speed,Elevation Gain,Average Heart Rate,"
+                 "Calories")
+
+
+def strava_csv(*rows):
+    out = [STRAVA_HEADER]
+    for aid, when, name, kind, km, secs, hr in rows:
+        out.append(f'{aid},"{when}",{name},{kind},,{secs},{km},{hr + 20},40,false,,,activities/{aid}.fit.gz,78,,'
+                   f'{secs}.0,{secs - 30}.0,{km * 1000 + 0.5},4.1,3.2,42.0,{hr}.0,410')
+    return "\n".join(out) + "\n"
+
+
+def strava_zip(csv_text):
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("activities.csv", csv_text)
+        zf.writestr("activities/1.fit.gz", b"not read")
+    return buf.getvalue()
+
+
+RUN1 = ("15400000001", "Nov 16, 2026, 12:05:00 PM", "Morning Run", "Run", 5.01, 1800, 150)
+RIDE = ("15400000002", "Nov 17, 2026, 12:00:00 PM", "Commute", "Ride", 12.4, 2400, 130)
+RUN2 = ("15400000003", "Nov 21, 2026, 12:30:00 PM", "Long run", "Run", 10.0, 3900, 155)
+
+
+def test_strava_export_import(client):
+    up = lambda body, name="export_123.zip": client.post(  # noqa: E731
+        "/api/v1/strava/import", files={"file": (name, io.BytesIO(body))})
+    r = up(strava_zip(strava_csv(RUN1, RIDE)))
+    assert r.status_code == 200, r.text
+    assert (r.json()["added"], r.json()["runs"], r.json()["latestRun"]) == (2, 1, "2026-11-16")
+    acts = client.get("/api/v1/state").json()["activities"]
+    run = acts[0]
+    assert run["date"] == "2026-11-16" and run["type"] == "Run" and run["name"] == "Morning Run"
+    assert run["distance"] == 5010.5 and run["moving"] == 1770 and run["elapsed"] == 1800  # metres, seconds
+    assert run["avgHr"] == 150 and run["maxHr"] == 170 and run["elevation"] == 42
+
+    # Next week's archive holds everything again plus the new run: only that one is added
+    r = up(strava_zip(strava_csv(RUN1, RIDE, RUN2))).json()
+    assert (r["added"], r["updated"]) == (1, 2)
+    assert len(client.get("/api/v1/state").json()["activities"]) == 3
+    assert client.get("/api/v1/state").json()["strava"]["lastImport"]
+
+    # The bare CSV works too
+    assert up(strava_csv(RUN2).encode(), "activities.csv").json()["updated"] == 1
+    assert "2026-11-21,2026-11-21T" in client.get("/api/v1/export/activities.csv").text
+
+    for bad in (b"PK\x03\x04 broken", strava_zip("a,b\n1,2\n"), b"hello,world\n1,2\n"):
+        assert up(bad).status_code == 400
+    assert up(b"%PDF", "notes.pdf").status_code == 400
+
+    # Activities travel with export / import; an old export without them leaves them alone
+    data = client.get("/api/v1/export.json").json()
+    assert len(data["activities"]) == 3
+    client.delete("/api/v1/strava")
+    assert client.get("/api/v1/state").json()["activities"] == []
+    client.post("/api/v1/import", files={"file": ("x.json", io.BytesIO(json.dumps(data).encode()))})
+    assert len(client.get("/api/v1/state").json()["activities"]) == 3
+    old = {k: v for k, v in data.items() if k != "activities"}
+    client.post("/api/v1/import", files={"file": ("x.json", io.BytesIO(json.dumps(old).encode()))})
+    assert len(client.get("/api/v1/state").json()["activities"]) == 3
+
+
+def test_strava_export_found_in_downloads(client, tmp_path, monkeypatch):
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    monkeypatch.setenv("REPBOOK_DOWNLOADS", str(downloads))
+    assert client.get("/api/v1/strava").json()["waiting"] is None
+
+    (downloads / "export_98765.zip").write_bytes(strava_zip(strava_csv(RUN1, RUN2)))
+    (downloads / "holiday.zip").write_bytes(b"PK")
+    waiting = client.get("/api/v1/state").json()["strava"]["waiting"]
+    assert waiting["name"] == "export_98765.zip"
+
+    r = client.post("/api/v1/strava/import-downloads", json={"name": "export_98765.zip"}).json()
+    assert r["added"] == 2 and r["strava"]["waiting"] is None  # imported: no longer offered
+
+    assert client.post("/api/v1/strava/import-downloads", json={"name": "../db.sqlite3"}).status_code == 400
+    assert client.post("/api/v1/strava/import-downloads", json={"name": "export_1.zip"}).status_code == 400
